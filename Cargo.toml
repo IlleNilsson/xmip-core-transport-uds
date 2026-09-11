@@ -20,6 +20,10 @@ transport = { package = "xmip-core-transport", git = "https://github.com/IlleNil
 # The carrier, declared in architecture.toml: ISO-TP segments and reassembles,
 # and re-exports the bus and frame types of can-bus beneath it.
 iso_tp = { package = "xmip-core-transport-iso-tp", git = "https://github.com/IlleNilsson/xmip-core-transport-iso-tp", branch = "main" }
+# The bus beneath ISO-TP, for the two directed loopback buses a session
+# stands on: iso-tp does not re-export can-bus's bus types yet, so they are
+# taken from can-bus directly until it does.
+can_bus = { package = "xmip-core-transport-can-bus", git = "https://github.com/IlleNilsson/xmip-core-transport-can-bus", branch = "main" }
 
 [lints.rust]
 unsafe_code = "forbid"
