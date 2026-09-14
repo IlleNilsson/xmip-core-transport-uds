@@ -25,6 +25,11 @@ iso_tp = { package = "xmip-core-transport-iso-tp", git = "https://github.com/Ill
 # taken from can-bus directly until it does.
 can_bus = { package = "xmip-core-transport-can-bus", git = "https://github.com/IlleNilsson/xmip-core-transport-can-bus", branch = "main" }
 
+[dev-dependencies]
+# The loopback payloads the tests drive, from the capability's test
+# support and never a production build (ADR-0044).
+transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main", features = ["test-support"] }
+
 [lints.rust]
 unsafe_code = "forbid"
 
