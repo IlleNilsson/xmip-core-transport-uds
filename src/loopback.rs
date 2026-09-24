@@ -1,8 +1,8 @@
 //! Both ends of one diagnostic session on this machine (ADR-0051).
 //!
-//! A tester and an ECU on a fresh pair of directed loopback buses per
-//! round, each end an ISO-TP session of its own: the tester's requests
-//! cross one bus, the ECU's answers come back on the other. The near end
+//! A tester and an ECU, two nodes on a fresh simulated bus per round,
+//! each end an ISO-TP session of its own: the tester's requests
+//! reach the ECU, and its answers come back. The near end
 //! writes a Stream to the data identifier; the far end serves the
 //! identifier as the ECU and hands the Stream on when the write completes.
 //! The two ends need two threads, so the capability's `round` drives it.
@@ -11,24 +11,37 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use can_bus::{Bus, Loopback as LoopbackBus};
+use can_bus::Bus;
 use iso_tp::{ECU_ID, IsoTpTransport, TESTER_ID};
+use sdk::broadcast::Medium;
 use transport::Arrived;
 use transport::error::{Result, protocol_error};
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 
 use crate::UdsTransport;
 
-/// The two directed buses of one loopback session: the tester transmits on
-/// `to_ecu` and reads `to_tester`, the ECU the other way round.
+/// One loopback session: the tester and the ECU, each a node on one simulated
+/// bus, hearing what the other transmits. Until 2026-09-24 a session was two
+/// directed queues, because the in-process bus returned a node's own frames.
 #[derive(Clone)]
 pub(crate) struct Session {
-    to_ecu: Arc<dyn Bus>,
-    to_tester: Arc<dyn Bus>,
+    tester: Arc<dyn Bus>,
+    ecu: Arc<dyn Bus>,
+}
+
+impl Session {
+    /// A fresh bus with a tester and an ECU on it.
+    fn fresh() -> Self {
+        let medium = Medium::new("loopback");
+        Self {
+            tester: Arc::new(medium.node()),
+            ecu: Arc::new(medium.node()),
+        }
+    }
 }
 
 /// The sessions a loopback has stood up and not yet taken, by address. A
-/// fresh pair of buses per round, so rounds driven at once from several
+/// fresh bus per round, so rounds driven at once from several
 /// threads never read each other's frames.
 pub(crate) type Standing = Arc<Mutex<HashMap<String, Session>>>;
 
@@ -37,12 +50,12 @@ static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 impl UdsTransport {
     /// Both ends on this machine: a tester whose far end is an ECU, the
-    /// two on a fresh pair of directed loopback buses per round, the
+    /// two nodes on a fresh simulated bus per round, the
     /// loopback timeout on both. The link this instance itself holds
     /// carries nothing; every round stands up its own.
     #[must_use]
     pub fn loopback() -> Self {
-        let idle: Arc<dyn Bus> = Arc::new(LoopbackBus::new());
+        let idle: Arc<dyn Bus> = Arc::new(Medium::new("loopback").node());
         let link = IsoTpTransport::new(Arc::clone(&idle), idle, TESTER_ID)
             .timing_out_after(LOOPBACK_TIMEOUT);
         Self::new(link)
@@ -57,7 +70,7 @@ impl UdsTransport {
             .get(address)
             .cloned()
             .ok_or_else(|| protocol_error(format!("{address} is not a session stood up here")))?;
-        let link = IsoTpTransport::new(session.to_ecu, session.to_tester, TESTER_ID)
+        let link = IsoTpTransport::new(Arc::clone(&session.tester), session.tester, TESTER_ID)
             .timing_out_after(LOOPBACK_TIMEOUT);
         Ok(Self {
             link,
@@ -93,16 +106,9 @@ impl FarEnd for Serving {
 
 impl Loopback for UdsTransport {
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
-        let session = Session {
-            to_ecu: Arc::new(LoopbackBus::new()),
-            to_tester: Arc::new(LoopbackBus::new()),
-        };
-        let link = IsoTpTransport::new(
-            Arc::clone(&session.to_tester),
-            Arc::clone(&session.to_ecu),
-            ECU_ID,
-        )
-        .timing_out_after(LOOPBACK_TIMEOUT);
+        let session = Session::fresh();
+        let link = IsoTpTransport::new(Arc::clone(&session.ecu), Arc::clone(&session.ecu), ECU_ID)
+            .timing_out_after(LOOPBACK_TIMEOUT);
         let address = format!(
             "uds://loopback/{}",
             NEXT_SESSION.fetch_add(1, Ordering::Relaxed)
