@@ -14,10 +14,10 @@
 //! is as long as its blocks.
 //!
 //! The carrier is [`iso_tp`](iso_tp): each request and each response is
-//! one ISO-TP message, segmented and reassembled there. The two directed
-//! buses of one session are can-bus's loopback bus, so a tester and an ECU
-//! round-trip in process with no hardware, which is what
-//! [`UdsTransport::loopback`] stands up (ADR-0051).
+//! one ISO-TP message, segmented and reassembled there. A tester and an ECU
+//! are two nodes on one bus — in process, the SDK's simulated one — so they
+//! round-trip with no hardware, which is what [`UdsTransport::loopback`]
+//! stands up (ADR-0051).
 //!
 //! The origin URI names the identifier that was written:
 //! `uds://<bus>/0x<did>`.
@@ -236,18 +236,20 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    use can_bus::{Bus, Loopback as LoopbackBus};
+    use can_bus::Bus;
     use iso_tp::{ECU_ID, TESTER_ID};
+    use sdk::broadcast::Medium;
 
-    /// A tester and an ECU on two directed buses, on this thread: what the
+    /// A tester and an ECU, nodes on one simulated bus, on this thread: what the
     /// tester asks sits on the bus until the ECU is asked to serve.
     fn pair() -> (UdsTransport, UdsTransport) {
-        let to_ecu: Arc<dyn Bus> = Arc::new(LoopbackBus::new());
-        let to_tester: Arc<dyn Bus> = Arc::new(LoopbackBus::new());
+        let medium = Medium::new("loopback");
+        let (at_tester, at_ecu): (Arc<dyn Bus>, Arc<dyn Bus>) =
+            (Arc::new(medium.node()), Arc::new(medium.node()));
         let quick = Duration::from_millis(20);
-        let tester = IsoTpTransport::new(Arc::clone(&to_ecu), Arc::clone(&to_tester), TESTER_ID)
+        let tester = IsoTpTransport::new(Arc::clone(&at_tester), at_tester, TESTER_ID)
             .timing_out_after(quick);
-        let ecu = IsoTpTransport::new(to_tester, to_ecu, ECU_ID).timing_out_after(quick);
+        let ecu = IsoTpTransport::new(Arc::clone(&at_ecu), at_ecu, ECU_ID).timing_out_after(quick);
         (UdsTransport::new(tester), UdsTransport::new(ecu))
     }
 
