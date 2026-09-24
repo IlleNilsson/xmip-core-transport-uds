@@ -29,7 +29,9 @@ pub mod service;
 use std::sync::Arc;
 
 use iso_tp::IsoTpTransport;
+use iso_tp::loopback::Session;
 use transport::error::{Result, protocol_error};
+use transport::standing::Standing;
 use transport::{Arrived, Directions, Transport};
 
 pub use ecu::{Ecu, MAX_BLOCK_LENGTH};
@@ -46,7 +48,7 @@ pub struct UdsTransport {
     link: IsoTpTransport,
     did: u16,
     ecu: Arc<Ecu>,
-    standing: loopback::Standing,
+    standing: Standing<Session>,
 }
 
 impl UdsTransport {
@@ -58,7 +60,7 @@ impl UdsTransport {
             link,
             did: DEFAULT_DID,
             ecu: Arc::new(Ecu::new()),
-            standing: loopback::Standing::default(),
+            standing: Standing::default(),
         }
     }
 

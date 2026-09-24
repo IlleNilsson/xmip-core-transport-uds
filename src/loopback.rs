@@ -7,46 +7,16 @@
 //! identifier as the ECU and hands the Stream on when the write completes.
 //! The two ends need two threads, so the capability's `round` drives it.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use can_bus::Bus;
+use iso_tp::loopback::Session;
 use iso_tp::{ECU_ID, IsoTpTransport, TESTER_ID};
 use sdk::broadcast::Medium;
-use transport::Arrived;
-use transport::error::{Result, protocol_error};
+use transport::error::Result;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 
 use crate::UdsTransport;
-
-/// One loopback session: the tester and the ECU, each a node on one simulated
-/// bus, hearing what the other transmits. Until 2026-09-24 a session was two
-/// directed queues, because the in-process bus returned a node's own frames.
-#[derive(Clone)]
-pub(crate) struct Session {
-    tester: Arc<dyn Bus>,
-    ecu: Arc<dyn Bus>,
-}
-
-impl Session {
-    /// A fresh bus with a tester and an ECU on it.
-    fn fresh() -> Self {
-        let medium = Medium::new("loopback");
-        Self {
-            tester: Arc::new(medium.node()),
-            ecu: Arc::new(medium.node()),
-        }
-    }
-}
-
-/// The sessions a loopback has stood up and not yet taken, by address. A
-/// fresh bus per round, so rounds driven at once from several
-/// threads never read each other's frames.
-pub(crate) type Standing = Arc<Mutex<HashMap<String, Session>>>;
-
-/// Numbers the sessions, so each address names one.
-static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 
 impl UdsTransport {
     /// Both ends on this machine: a tester whose far end is an ECU, the
@@ -63,69 +33,33 @@ impl UdsTransport {
 
     /// The tester's end of the session at `address`.
     fn tester(&self, address: &str) -> Result<Self> {
-        let session = self
-            .standing
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(address)
-            .cloned()
-            .ok_or_else(|| protocol_error(format!("{address} is not a session stood up here")))?;
+        let session = self.standing.session(address)?;
         let link = IsoTpTransport::new(Arc::clone(&session.tester), session.tester, TESTER_ID)
             .timing_out_after(LOOPBACK_TIMEOUT);
         Ok(Self {
             link,
             did: self.did,
             ecu: Arc::clone(&self.ecu),
-            standing: Arc::clone(&self.standing),
+            standing: self.standing.clone(),
         })
     }
 }
 
-/// An ECU serving until one write completes. It owns the session: the
-/// address is forgotten once the Stream is taken.
-struct Serving {
-    end: UdsTransport,
-    address: String,
-}
-
-impl FarEnd for Serving {
-    fn address(&self) -> &str {
-        &self.address
-    }
-
-    fn take_one(self: Box<Self>) -> Result<Arrived> {
-        let taken = self.end.serve();
-        self.end
-            .standing
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&self.address);
-        taken
-    }
-}
-
 impl Loopback for UdsTransport {
+    /// An ECU serving until one write completes. It owns the session: the
+    /// address is forgotten once the Stream is taken.
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
         let session = Session::fresh();
         let link = IsoTpTransport::new(Arc::clone(&session.ecu), Arc::clone(&session.ecu), ECU_ID)
             .timing_out_after(LOOPBACK_TIMEOUT);
-        let address = format!(
-            "uds://loopback/{}",
-            NEXT_SESSION.fetch_add(1, Ordering::Relaxed)
-        );
-        self.standing
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(address.clone(), session);
-        Ok(Box::new(Serving {
-            end: Self {
-                link,
-                did: self.did,
-                ecu: Arc::clone(&self.ecu),
-                standing: Arc::clone(&self.standing),
-            },
-            address,
-        }))
+        let end = Self {
+            link,
+            did: self.did,
+            ecu: Arc::clone(&self.ecu),
+            standing: self.standing.clone(),
+        };
+        let address = self.standing.stand("uds", session);
+        Ok(self.standing.far_end(address, move || end.serve()))
     }
 
     fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {
@@ -165,10 +99,7 @@ mod tests {
             "a download has no ceiling"
         );
         assert!(loopback.refuses(b"x").is_none());
-        assert!(
-            loopback.standing.lock().expect("lock").is_empty(),
-            "a taken session is forgotten"
-        );
+        assert!(loopback.standing.is_empty(), "a taken session is forgotten");
         assert_eq!(
             loopback.ecu().held(DEFAULT_DID).expect("held"),
             b"\r\n".repeat(400)
