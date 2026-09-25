@@ -28,8 +28,8 @@ pub mod service;
 
 use std::sync::Arc;
 
+use can_bus::loopback::Session;
 use iso_tp::IsoTpTransport;
-use iso_tp::loopback::Session;
 use transport::error::{Result, protocol_error};
 use transport::standing::Standing;
 use transport::{Arrived, Directions, Transport};
@@ -238,16 +238,15 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    use can_bus::Bus;
     use iso_tp::{ECU_ID, TESTER_ID};
-    use sdk::broadcast::Medium;
 
     /// A tester and an ECU, nodes on one simulated bus, on this thread: what the
     /// tester asks sits on the bus until the ECU is asked to serve.
     fn pair() -> (UdsTransport, UdsTransport) {
-        let medium = Medium::new("loopback");
-        let (at_tester, at_ecu): (Arc<dyn Bus>, Arc<dyn Bus>) =
-            (Arc::new(medium.node()), Arc::new(medium.node()));
+        let Session {
+            near: at_tester,
+            far: at_ecu,
+        } = Session::fresh();
         let quick = Duration::from_millis(20);
         let tester = IsoTpTransport::new(Arc::clone(&at_tester), at_tester, TESTER_ID)
             .timing_out_after(quick);

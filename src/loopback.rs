@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use can_bus::Bus;
-use iso_tp::loopback::Session;
+use can_bus::loopback::Session;
 use iso_tp::{ECU_ID, IsoTpTransport, TESTER_ID};
 use sdk::broadcast::Medium;
 use transport::error::Result;
@@ -34,7 +34,7 @@ impl UdsTransport {
     /// The tester's end of the session at `address`.
     fn tester(&self, address: &str) -> Result<Self> {
         let session = self.standing.session(address)?;
-        let link = IsoTpTransport::new(Arc::clone(&session.tester), session.tester, TESTER_ID)
+        let link = IsoTpTransport::new(Arc::clone(&session.near), session.near, TESTER_ID)
             .timing_out_after(LOOPBACK_TIMEOUT);
         Ok(Self {
             link,
@@ -50,7 +50,7 @@ impl Loopback for UdsTransport {
     /// address is forgotten once the Stream is taken.
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
         let session = Session::fresh();
-        let link = IsoTpTransport::new(Arc::clone(&session.ecu), Arc::clone(&session.ecu), ECU_ID)
+        let link = IsoTpTransport::new(Arc::clone(&session.far), Arc::clone(&session.far), ECU_ID)
             .timing_out_after(LOOPBACK_TIMEOUT);
         let end = Self {
             link,
