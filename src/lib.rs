@@ -29,10 +29,11 @@ pub mod service;
 use std::sync::Arc;
 
 use can_bus::loopback::Session;
-use iso_tp::IsoTpTransport;
+use iso_tp::{ECU_ID, IsoTpTransport, TESTER_ID};
 use transport::error::{Result, protocol_error};
 use transport::standing::Standing;
-use transport::{Arrived, Directions, Transport};
+use transport::{Arrived, Configured, Directions, Transport};
+use xcore::settings::{Applies, Fixed, Kind, Presence, Setting, Settings};
 
 pub use ecu::{Ecu, MAX_BLOCK_LENGTH};
 pub use service::{Negative, Request, Response, code};
@@ -233,12 +234,95 @@ impl Transport for UdsTransport {
     }
 }
 
+impl Configured for UdsTransport {
+    /// The address names the bus, as can-bus opens it: the kernel interface,
+    /// `can0`, where the build has one; a simulated bus of that name
+    /// otherwise.
+    const SETTINGS: &'static Settings = &Settings {
+        technology: env!("CARGO_PKG_NAME"),
+        settings: &[
+            Setting {
+                name: "did",
+                kind: Kind::Integer {
+                    minimum: 0,
+                    maximum: 0xffff,
+                },
+                presence: Presence::Default(Fixed::Integer(DEFAULT_DID as i64)),
+                meaning: "The data identifier a Send Location writes and a Receive Location \
+                          serves.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "tester_id",
+                kind: Kind::Integer {
+                    minimum: 0,
+                    maximum: 0x1fff_ffff,
+                },
+                presence: Presence::Default(Fixed::Integer(TESTER_ID as i64)),
+                meaning: "The CAN identifier a Send Location's tester transmits under.",
+                applies: Applies::Send,
+            },
+            Setting {
+                name: "ecu_id",
+                kind: Kind::Integer {
+                    minimum: 0,
+                    maximum: 0x1fff_ffff,
+                },
+                presence: Presence::Default(Fixed::Integer(ECU_ID as i64)),
+                meaning: "The CAN identifier a Receive Location's ECU answers from.",
+                applies: Applies::Receive,
+            },
+            Setting {
+                name: "timeout",
+                kind: Kind::Duration,
+                presence: Presence::Optional,
+                meaning: "How long a peer that stops mid-transfer is waited on; ISO-TP's own \
+                          when left out.",
+                applies: Applies::Both,
+            },
+        ],
+    };
+
+    fn configured(address: &str, settings: &xcore::settings::Read) -> Result<Self> {
+        let node = can_bus::open_bus(address)?;
+        // Each side's identifier is read on its own side only: the tester's
+        // where it sends, the ECU's where it receives.
+        let id = settings
+            .optional_integer("tester_id")
+            .or_else(|| settings.optional_integer("ecu_id"))
+            .unwrap_or_default();
+        let id = u32::try_from(id).map_err(|_| protocol_error("a CAN identifier out of range"))?;
+        let mut link = IsoTpTransport::new(Arc::clone(&node), node, id);
+        if let Some(timeout) = settings.optional_duration("timeout") {
+            link = link.timing_out_after(timeout);
+        }
+        let did = u16::try_from(settings.integer("did"))
+            .map_err(|_| protocol_error("a data identifier over 0xffff"))?;
+        Ok(Self::new(link).at(did))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
 
-    use iso_tp::{ECU_ID, TESTER_ID};
+    use xcore::settings::Given;
+
+    #[test]
+    fn uds_declares_its_settings_and_reads_through_them() {
+        assert_eq!(UdsTransport::SETTINGS.problems(), Vec::<String>::new());
+        let given = [("did".to_string(), Given::Integer(0xf1a0))];
+        let built = UdsTransport::open("vcan0", Applies::Send, &given).expect("built");
+        assert_eq!(built.did, 0xf1a0);
+        let served = UdsTransport::open("vcan0", Applies::Receive, &[]).expect("built");
+        assert_eq!(served.did, DEFAULT_DID);
+        let tester = [("tester_id".to_string(), Given::Integer(0x7e1))];
+        let Err(refused) = UdsTransport::open("vcan0", Applies::Receive, &tester) else {
+            panic!("an ECU reads no tester identifier");
+        };
+        assert!(refused.message.contains("tester_id"), "{}", refused.message);
+    }
 
     /// A tester and an ECU, nodes on one simulated bus, on this thread: what the
     /// tester asks sits on the bus until the ECU is asked to serve.
