@@ -12,17 +12,17 @@
 use transport::error::{Result, protocol_error};
 
 /// `ReadDataByIdentifier`.
-pub const READ_DATA_BY_IDENTIFIER: u8 = 0x22;
+const READ_DATA_BY_IDENTIFIER: u8 = 0x22;
 /// `WriteDataByIdentifier`.
-pub const WRITE_DATA_BY_IDENTIFIER: u8 = 0x2e;
+const WRITE_DATA_BY_IDENTIFIER: u8 = 0x2e;
 /// `RoutineControl`: start, stop or request the results of a routine.
-pub const ROUTINE_CONTROL: u8 = 0x31;
+const ROUTINE_CONTROL: u8 = 0x31;
 /// `RequestDownload`: open a download to a memory address.
-pub const REQUEST_DOWNLOAD: u8 = 0x34;
+const REQUEST_DOWNLOAD: u8 = 0x34;
 /// `TransferData`: one block of an open download.
-pub const TRANSFER_DATA: u8 = 0x36;
+const TRANSFER_DATA: u8 = 0x36;
 /// `RequestTransferExit`: close the download.
-pub const REQUEST_TRANSFER_EXIT: u8 = 0x37;
+const REQUEST_TRANSFER_EXIT: u8 = 0x37;
 /// What a positive response adds to the service identifier.
 pub const POSITIVE: u8 = 0x40;
 /// The service identifier of every negative response.

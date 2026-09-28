@@ -29,7 +29,9 @@ pub mod service;
 use std::sync::Arc;
 
 use can_bus::loopback::Session;
+use codec::hex::prefixed_number;
 use iso_tp::{ECU_ID, IsoTpTransport, TESTER_ID};
+use net::Target;
 use transport::error::{Result, protocol_error};
 use transport::standing::Standing;
 use transport::{Arrived, Configured, Directions, Transport};
@@ -188,11 +190,7 @@ impl UdsTransport {
             let (response, written) = self.ecu.answer(&request.bytes);
             self.link.deliver(&response.encode())?;
             if let Some(did) = written {
-                let bus = request
-                    .origin_uri
-                    .strip_prefix("isotp://")
-                    .and_then(|rest| rest.split('/').next())
-                    .unwrap_or("isotp");
+                let bus = iso_tp::bus_of(&request.origin_uri);
                 let bytes = self.ecu.held(did).unwrap_or_default();
                 return Ok(Arrived::new(format!("uds://{bus}/{did:#06x}"), bytes));
             }
@@ -202,15 +200,16 @@ impl UdsTransport {
     /// `uds://<bus>/0x<did>`: what `target` overrides of this end's
     /// identifier.
     fn addressed(&self, target: &str) -> Result<u16> {
-        let Some((_, path)) = transport::socket::target("uds", target) else {
+        let Some((_, path)) =
+            Target::under(&["uds"], target).map(|named| (named.authority(), named.path()))
+        else {
             return Ok(self.did);
         };
         if path.is_empty() {
             return Ok(self.did);
         }
-        path.strip_prefix("0x")
-            .and_then(|hex| u16::from_str_radix(hex, 16).ok())
-            .ok_or_else(|| protocol_error(format!("{path} is not a data identifier")))
+        prefixed_number(path)
+            .map_err(|_| protocol_error(format!("{path} is not a data identifier")))
     }
 }
 
