@@ -28,7 +28,8 @@ pub const POSITIVE: u8 = 0x40;
 /// The service identifier of every negative response.
 pub const NEGATIVE: u8 = 0x7f;
 
-/// The negative response codes an ECU answers with.
+/// The negative response codes an ECU answers with (ISO 14229-1, Annex
+/// A.1).
 pub mod code {
     /// The service is not one the ECU offers.
     pub const SERVICE_NOT_SUPPORTED: u8 = 0x11;
@@ -36,10 +37,19 @@ pub mod code {
     pub const SUB_FUNCTION_NOT_SUPPORTED: u8 = 0x12;
     /// The request is the wrong length or shape.
     pub const INCORRECT_MESSAGE_LENGTH: u8 = 0x13;
+    /// The ECU is busy and did not carry the request out: the tester asks
+    /// again. What a write whose receive cycle failed is answered with.
+    pub const BUSY_REPEAT_REQUEST: u8 = 0x21;
     /// The request came out of order: a transfer with no download open.
     pub const REQUEST_SEQUENCE_ERROR: u8 = 0x24;
-    /// A parameter the ECU does not have: an unknown identifier.
+    /// A parameter the ECU does not have or take: an unknown identifier,
+    /// and what a write whose content the receive cycle refused is answered
+    /// with; the tester does not ask again.
     pub const REQUEST_OUT_OF_RANGE: u8 = 0x31;
+    /// The tester has not unlocked what it asks for: what a write from a
+    /// tester not identified or not permitted is answered with; it does not
+    /// ask again.
+    pub const SECURITY_ACCESS_DENIED: u8 = 0x33;
     /// A block out of sequence.
     pub const WRONG_BLOCK_SEQUENCE_COUNTER: u8 = 0x73;
     /// The answer takes longer; the tester waits for another.
