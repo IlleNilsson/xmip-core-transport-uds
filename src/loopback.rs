@@ -59,7 +59,7 @@ impl Loopback for UdsTransport {
             standing: self.standing.clone(),
         };
         let address = self.standing.stand("uds", session);
-        Ok(self.standing.far_end(address, move || end.serve()))
+        Ok(self.standing.far_end(address, move || end.serve()?.taken()))
     }
 
     fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {

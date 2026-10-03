@@ -19,6 +19,17 @@
 //! round-trip with no hardware, which is what [`UdsTransport::loopback`]
 //! stands up (ADR-0051).
 //!
+//! **The tester is answered after the whole receive cycle.** The request
+//! that completes a write waits for its response until the cycle has
+//! ended: the positive response on [`transport::Verdict::Accepted`]; on
+//! [`transport::Verdict::Refused`] a negative response the tester does not
+//! repeat (ISO 14229-1, Annex A.1) — *security access denied*
+//! ([`code::SECURITY_ACCESS_DENIED`]) for a tester not identified or not
+//! permitted, *request out of range* ([`code::REQUEST_OUT_OF_RANGE`]) for
+//! content refused; the negative response *busy, repeat request*
+//! ([`code::BUSY_REPEAT_REQUEST`]) on [`transport::Verdict::Failed`], which
+//! fails the tester's write as retryable so it writes again. Each written Stream arrives whole.
+//!
 //! The origin URI names the identifier that was written:
 //! `uds://<bus>/0x<did>`.
 
@@ -32,9 +43,9 @@ use can_bus::loopback::Session;
 use codec::hex::prefixed_number;
 use iso_tp::{ECU_ID, IsoTpTransport, TESTER_ID};
 use net::Target;
-use transport::error::{Result, protocol_error};
+use transport::error::{Result, TransportError, protocol_error};
 use transport::standing::Standing;
-use transport::{Arrived, Configured, Directions, Transport};
+use transport::{Acknowledgement, Arrived, Configured, Directions, Refusal, Transport, Verdict};
 use xcore::settings::{Applies, Fixed, Kind, Presence, Setting, Settings};
 
 pub use ecu::{Ecu, MAX_BLOCK_LENGTH};
@@ -109,6 +120,14 @@ impl UdsTransport {
                     code: code::RESPONSE_PENDING,
                     ..
                 }) => {}
+                Response::Negative(Negative {
+                    code: code::BUSY_REPEAT_REQUEST,
+                    service,
+                }) => {
+                    return Err(TransportError::retryable(format!(
+                        "service {service:#04x}: the ECU was busy, repeat the request"
+                    )));
+                }
                 Response::Negative(negative) => {
                     return Err(protocol_error(format!(
                         "service {:#04x} refused with code {:#04x}",
@@ -177,23 +196,48 @@ impl UdsTransport {
     }
 
     /// Serve as the ECU until a tester completes a write: what it wrote,
-    /// as a Stream.
+    /// as a Stream, whole. Every request is answered as it comes but the
+    /// one that completes the write — `WriteDataByIdentifier`, or
+    /// `RequestTransferExit` after a download — whose response is the
+    /// arrival's verdict: the positive response on accepted; the negative
+    /// response *security access denied* or *request out of range* on
+    /// refused, which the tester does not write again; the negative
+    /// response *busy, repeat request* on failed, after which it writes
+    /// again.
     ///
     /// # Errors
     /// A tester that stops, hangs up, or a link that failed.
     pub fn serve(&self) -> Result<Arrived> {
         loop {
             let request = self.link.collect()?;
-            if request.bytes.is_empty() {
+            let Some(&service) = request.bytes.first() else {
                 return Err(protocol_error("the tester hung up"));
-            }
+            };
             let (response, written) = self.ecu.answer(&request.bytes);
-            self.link.deliver(&response.encode())?;
-            if let Some(did) = written {
-                let bus = iso_tp::bus_of(&request.origin_uri);
-                let bytes = self.ecu.held(did).unwrap_or_default();
-                return Ok(Arrived::new(format!("uds://{bus}/{did:#06x}"), bytes));
-            }
+            let Some(did) = written else {
+                self.link.deliver(&response.encode())?;
+                continue;
+            };
+            let bus = iso_tp::bus_of(&request.origin_uri);
+            let bytes = self.ecu.held(did).unwrap_or_default();
+            let link = self.link.clone();
+            let positive = response.encode();
+            let acknowledgement = Acknowledgement::deferred(move |verdict| {
+                let code = match verdict {
+                    Verdict::Accepted => return link.deliver(&positive),
+                    Verdict::Refused(Refusal::Unidentified | Refusal::Forbidden) => {
+                        code::SECURITY_ACCESS_DENIED
+                    }
+                    Verdict::Refused(Refusal::Unacceptable) => code::REQUEST_OUT_OF_RANGE,
+                    Verdict::Failed => code::BUSY_REPEAT_REQUEST,
+                };
+                link.deliver(&Negative { service, code }.encode())
+            });
+            return Ok(Arrived::whole(
+                format!("uds://{bus}/{did:#06x}"),
+                bytes,
+                acknowledgement,
+            ));
         }
     }
 
@@ -222,7 +266,13 @@ impl Transport for UdsTransport {
         Directions::BOTH
     }
 
-    /// Serve as the ECU: one Stream per completed write.
+    fn arrivals(&self) -> transport::Arrivals {
+        transport::Arrivals::Ordered("one line or bus, answered in the order it speaks")
+    }
+
+    /// Serve as the ECU: one Stream per completed write, whose response
+    /// waits for the receive cycle — positive on accepted, *busy, repeat
+    /// request* on refused.
     fn receive(&self) -> Result<Vec<Arrived>> {
         Ok(vec![self.serve()?])
     }
@@ -355,6 +405,49 @@ mod tests {
             "{error}"
         );
         assert!(tester.read(0x0001).is_err(), "nobody answers");
+    }
+
+    #[test]
+    fn a_write_is_refused_for_good_or_answered_busy_and_written_again_then_positively() {
+        let Session {
+            near: at_tester,
+            far: at_ecu,
+        } = Session::fresh();
+        let wait = Duration::from_secs(2);
+        let tester = UdsTransport::new(
+            IsoTpTransport::new(Arc::clone(&at_tester), at_tester, TESTER_ID)
+                .timing_out_after(wait),
+        );
+        let ecu = UdsTransport::new(
+            IsoTpTransport::new(Arc::clone(&at_ecu), at_ecu, ECU_ID).timing_out_after(wait),
+        );
+        let writing = std::thread::spawn(move || {
+            let forbidden = tester.write(0xf190, b"R1").expect_err("denied");
+            let unacceptable = tester.write(0xf190, b"R2").expect_err("out of range");
+            let failed = tester.write(0xf190, b"C1").expect_err("busy");
+            tester.write(0xf190, b"C1")?;
+            Ok::<_, TransportError>([forbidden, unacceptable, failed])
+        });
+        let forbidden = ecu.receive().expect("first").remove(0);
+        assert!(forbidden.defers(), "the tester waits for its response");
+        forbidden
+            .refused(transport::Refusal::Forbidden)
+            .expect("denied");
+        let unacceptable = ecu.receive().expect("second").remove(0);
+        unacceptable
+            .refused(transport::Refusal::Unacceptable)
+            .expect("out of range");
+        let failed = ecu.receive().expect("third").remove(0);
+        failed.failed().expect("busy");
+        let again = ecu.receive().expect("again").remove(0);
+        assert_eq!(again.taken().expect("answered").bytes, b"C1");
+        let [forbidden, unacceptable, failed] =
+            writing.join().expect("thread").expect("written again");
+        for (refused, code) in [(forbidden, "0x33"), (unacceptable, "0x31")] {
+            assert!(!refused.retryable, "{refused}");
+            assert!(refused.message.contains(code), "{refused}");
+        }
+        assert!(failed.retryable, "{failed}");
     }
 
     #[test]
