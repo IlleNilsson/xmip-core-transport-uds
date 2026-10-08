@@ -233,11 +233,10 @@ impl UdsTransport {
                 };
                 link.deliver(&Negative { service, code }.encode())
             });
-            return Ok(Arrived::whole(
-                format!("uds://{bus}/{did:#06x}"),
-                bytes,
-                acknowledgement,
-            ));
+            return Ok(
+                Arrived::whole(format!("uds://{bus}/{did:#06x}"), bytes, acknowledgement)
+                    .observing_all(request.observed),
+            );
         }
     }
 

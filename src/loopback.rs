@@ -13,6 +13,7 @@ use can_bus::Bus;
 use can_bus::loopback::Session;
 use iso_tp::{ECU_ID, IsoTpTransport, TESTER_ID};
 use sdk::broadcast::Medium;
+use transport::ArrivalIdentity;
 use transport::error::Result;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 
@@ -46,6 +47,10 @@ impl UdsTransport {
 }
 
 impl Loopback for UdsTransport {
+    fn arrival_identity(&self) -> ArrivalIdentity {
+        ArrivalIdentity::Named(&[context::property::CAN_IDENTIFIER])
+    }
+
     /// An ECU serving until one write completes. It owns the session: the
     /// address is forgotten once the Stream is taken.
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
