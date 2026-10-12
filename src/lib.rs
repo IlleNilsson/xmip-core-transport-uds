@@ -269,6 +269,10 @@ impl Transport for UdsTransport {
         transport::Arrivals::Ordered("one line or bus, answered in the order it speaks")
     }
 
+    fn waiting(&self) -> transport::Waiting {
+        transport::Waiting::Waits("a read of the bus waits for the tester's request")
+    }
+
     /// Serve as the ECU: one Stream per completed write, whose response
     /// waits for the receive cycle — positive on accepted, *busy, repeat
     /// request* on refused.
