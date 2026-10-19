@@ -276,12 +276,17 @@ impl Transport for UdsTransport {
     /// Serve as the ECU: one Stream per completed write, whose response
     /// waits for the receive cycle — positive on accepted, *busy, repeat
     /// request* on refused.
-    fn receive(&self) -> Result<Vec<Arrived>> {
+    fn receive_up_to(&self, _most: usize) -> Result<Vec<Arrived>> {
         Ok(vec![self.serve()?])
     }
 
+    fn sending(&self) -> transport::Sending {
+        transport::Sending::Gathered("one UDS request carries the whole body")
+    }
+
     /// Write as the tester; `target` may name the identifier.
-    fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
+    fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
+        let bytes: &[u8] = &outgoing.gather()?;
         self.write(self.addressed(target)?, bytes)
     }
 }
