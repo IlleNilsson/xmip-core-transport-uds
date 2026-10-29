@@ -244,7 +244,7 @@ impl UdsTransport {
     /// identifier.
     fn addressed(&self, target: &str) -> Result<u16> {
         let Some((_, path)) =
-            Target::under(&["uds"], target).map(|named| (named.authority(), named.path()))
+            Target::under(Self::SCHEMES, target).map(|named| (named.authority(), named.path()))
         else {
             return Ok(self.did);
         };
@@ -339,6 +339,9 @@ impl Configured for UdsTransport {
             },
         ],
     };
+
+    /// The schemes a Location's address is entered with to choose this technology.
+    const SCHEMES: &'static [&'static str] = &["uds"];
 
     fn configured(address: &str, settings: &xcore::settings::Read) -> Result<Self> {
         let node = can_bus::open_bus(address)?;
