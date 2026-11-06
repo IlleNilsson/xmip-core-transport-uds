@@ -9,7 +9,8 @@
 //! as it can hand the bytes on as a Stream.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
+use xcore::lock::Locked;
 
 use crate::service::{Negative, Request, Response, code};
 
@@ -52,10 +53,7 @@ impl Ecu {
     /// Hold `bytes` at `did`.
     #[must_use]
     pub fn holding(self, did: u16, bytes: &[u8]) -> Self {
-        self.identifiers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(did, bytes.to_vec());
+        self.identifiers.locked().insert(did, bytes.to_vec());
         self
     }
 
@@ -70,11 +68,7 @@ impl Ecu {
     /// What `did` holds.
     #[must_use]
     pub fn held(&self, did: u16) -> Option<Vec<u8>> {
-        self.identifiers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&did)
-            .cloned()
+        self.identifiers.locked().get(&did).cloned()
     }
 
     /// The one response to `request`, and the identifier a write to it has
@@ -100,7 +94,7 @@ impl Ecu {
                 control, routine, ..
             } => (positive(service, &[control], &routine.to_be_bytes()), None),
             Request::RequestDownload { address, size } => {
-                *self.download.lock().unwrap_or_else(PoisonError::into_inner) = Some(Download {
+                *self.download.locked() = Some(Download {
                     address,
                     size,
                     expected: 1,
@@ -120,14 +114,11 @@ impl Ecu {
     }
 
     fn store(&self, did: u16, bytes: Vec<u8>) {
-        self.identifiers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(did, bytes);
+        self.identifiers.locked().insert(did, bytes);
     }
 
     fn take_block(&self, block: u8, data: &[u8]) -> std::result::Result<(), u8> {
-        let mut open = self.download.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut open = self.download.locked();
         let download = open.as_mut().ok_or(code::REQUEST_SEQUENCE_ERROR)?;
         if block != download.expected {
             return Err(code::WRONG_BLOCK_SEQUENCE_COUNTER);
@@ -146,8 +137,7 @@ impl Ecu {
     fn close_download(&self) -> std::result::Result<u16, u8> {
         let download = self
             .download
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .locked()
             .take()
             .ok_or(code::REQUEST_SEQUENCE_ERROR)?;
         if download.bytes.len() != usize::try_from(download.size).unwrap_or(0) {
