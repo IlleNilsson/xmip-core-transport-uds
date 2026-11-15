@@ -329,19 +329,22 @@ impl Configured for UdsTransport {
                 meaning: "The CAN identifier a Receive Location's ECU answers from.",
                 applies: Applies::Receive,
             },
-            Setting {
-                name: "timeout",
-                kind: Kind::Duration,
-                presence: Presence::Optional,
-                meaning: "How long a peer that stops mid-transfer is waited on; ISO-TP's own \
-                          when left out.",
-                applies: Applies::Both,
-            },
+            transport::configured::timeout(
+                Applies::Both,
+                Some(iso_tp::DEFAULT_TIMEOUT),
+                "How long a peer that stops mid-transfer is waited on; ISO-TP's own \
+                 when left out.",
+            ),
         ],
     };
 
     /// The schemes a Location's address is entered with to choose this technology.
     const SCHEMES: &'static [&'static str] = &["uds"];
+
+    /// The ISO-TP link's: a peer is waited on as the link waits.
+    fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
+        self.link.timeout_kept()
+    }
 
     fn configured(address: &str, settings: &xcore::settings::Read) -> Result<Self> {
         let node = can_bus::open_bus(address)?;
@@ -352,10 +355,7 @@ impl Configured for UdsTransport {
             .or_else(|| settings.optional_integer("ecu_id"))
             .unwrap_or_default();
         let id = u32::try_from(id).map_err(|_| protocol_error("a CAN identifier out of range"))?;
-        let mut link = IsoTpTransport::new(Arc::clone(&node), node, id);
-        if let Some(timeout) = settings.optional_duration("timeout") {
-            link = link.timing_out_after(timeout);
-        }
+        let link = IsoTpTransport::new(Arc::clone(&node), node, id);
         let did = u16::try_from(settings.integer("did"))
             .map_err(|_| protocol_error("a data identifier over 0xffff"))?;
         Ok(Self::new(link).at(did))
@@ -377,6 +377,13 @@ mod tests {
         assert_eq!(built.did, 0xf1a0);
         let served = UdsTransport::open("vcan0", Applies::Receive, &[]).expect("built");
         assert_eq!(served.did, DEFAULT_DID);
+        // Left out, the Location waits the default it declares: ISO-TP's
+        // own, which the link waits when given none.
+        let unsaid = UdsTransport::SETTINGS
+            .read(Applies::Receive, &[])
+            .expect("read");
+        let timeout = unsaid.optional_duration(transport::configured::TIMEOUT);
+        assert_eq!(timeout, Some(iso_tp::DEFAULT_TIMEOUT));
         let tester = [("tester_id".to_string(), Given::Integer(0x7e1))];
         let Err(refused) = UdsTransport::open("vcan0", Applies::Receive, &tester) else {
             panic!("an ECU reads no tester identifier");
