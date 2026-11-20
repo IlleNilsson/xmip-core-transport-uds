@@ -347,7 +347,20 @@ impl Configured for UdsTransport {
     }
 
     fn configured(address: &str, settings: &xcore::settings::Read) -> Result<Self> {
-        let node = can_bus::open_bus(address)?;
+        Self::on(can_bus::open_bus(address)?, settings)
+    }
+}
+
+impl UdsTransport {
+    /// The tester or the ECU a Location's settings build on `node`: the bus
+    /// its address names, or a simulated one a test gives it.
+    ///
+    /// # Errors
+    /// A CAN identifier or a data identifier out of its range.
+    pub(crate) fn on(
+        node: Arc<dyn can_bus::Bus>,
+        settings: &xcore::settings::Read,
+    ) -> Result<Self> {
         // Each side's identifier is read on its own side only: the tester's
         // where it sends, the ECU's where it receives.
         let id = settings
@@ -369,13 +382,21 @@ mod tests {
 
     use xcore::settings::Given;
 
+    // Built on a simulated bus by its own constructor, never by a name a
+    // build with `socketcan` hands the kernel on Linux (another crate of the
+    // estate's one workspace turns it on).
     #[test]
     fn uds_declares_its_settings_and_reads_through_them() {
+        let on = |side, given: &[(String, Given)]| {
+            let read = UdsTransport::SETTINGS.read(side, given).expect("read");
+            let built = UdsTransport::on(can_bus::simulated("vcan0"), &read).expect("built");
+            built.finished(&read, side)
+        };
         assert_eq!(UdsTransport::SETTINGS.problems(), Vec::<String>::new());
         let given = [("did".to_string(), Given::Integer(0xf1a0))];
-        let built = UdsTransport::open("vcan0", Applies::Send, &given).expect("built");
+        let built = on(Applies::Send, &given);
         assert_eq!(built.did, 0xf1a0);
-        let served = UdsTransport::open("vcan0", Applies::Receive, &[]).expect("built");
+        let served = on(Applies::Receive, &[]);
         assert_eq!(served.did, DEFAULT_DID);
         // Left out, the Location waits the default it declares: ISO-TP's
         // own, which the link waits when given none.
