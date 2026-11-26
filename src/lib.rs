@@ -32,31 +32,51 @@
 //!
 //! The origin URI names the identifier that was written:
 //! `uds://<bus>/0x<did>`.
+//!
+//! **Built with its `declaration` feature alone** the crate is
+//! [`declaration`], what a Location of it is configured with, and none of
+//! the code above, which is behind the default feature: what the surfaces'
+//! library carries (ADR-0064, amendment 2026-11-26).
 
+#[cfg(feature = "declaration")]
+pub mod declaration;
+#[cfg(feature = "default")]
 pub mod ecu;
+#[cfg(feature = "default")]
 pub mod loopback;
+#[cfg(feature = "default")]
 pub mod service;
 
+#[cfg(feature = "default")]
 use std::sync::Arc;
 
+#[cfg(feature = "default")]
 use can_bus::loopback::Session;
+#[cfg(feature = "default")]
 use codec::hex::prefixed_number;
-use iso_tp::{ECU_ID, IsoTpTransport, TESTER_ID};
+#[cfg(feature = "default")]
+use iso_tp::IsoTpTransport;
+#[cfg(feature = "default")]
 use net::Target;
+#[cfg(feature = "default")]
 use transport::error::{Result, TransportError, protocol_error};
+#[cfg(feature = "default")]
 use transport::standing::Standing;
+#[cfg(feature = "default")]
 use transport::{Acknowledgement, Arrived, Configured, Directions, Refusal, Transport, Verdict};
-use xcore::settings::{Applies, Fixed, Kind, Presence, Setting, Settings};
+#[cfg(feature = "default")]
+use xcore::settings::Settings;
 
+#[cfg(feature = "declaration")]
+pub use declaration::DEFAULT_DID;
+#[cfg(feature = "default")]
 pub use ecu::{Ecu, MAX_BLOCK_LENGTH};
+#[cfg(feature = "default")]
 pub use service::{Negative, Request, Response, code};
-
-/// The data identifier a Location writes or serves unless told otherwise:
-/// the vehicle identification number of ISO 14229-1 annex C.
-pub const DEFAULT_DID: u16 = 0xf190;
 
 /// One end of a diagnostic session: a tester when it sends, an ECU when it
 /// receives.
+#[cfg(feature = "default")]
 #[derive(Clone)]
 pub struct UdsTransport {
     link: IsoTpTransport,
@@ -65,6 +85,7 @@ pub struct UdsTransport {
     standing: Standing<Session>,
 }
 
+#[cfg(feature = "default")]
 impl UdsTransport {
     /// A session over `link`, writing and serving [`DEFAULT_DID`] as an
     /// ECU holding nothing.
@@ -256,6 +277,7 @@ impl UdsTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Transport for UdsTransport {
     fn name(&self) -> &'static str {
         "uds"
@@ -291,55 +313,10 @@ impl Transport for UdsTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl Configured for UdsTransport {
-    /// The address names the bus, as can-bus opens it: the kernel interface,
-    /// `can0`, where the build has one; a simulated bus of that name
-    /// otherwise.
-    const SETTINGS: &'static Settings = &Settings {
-        technology: env!("CARGO_PKG_NAME"),
-        settings: &[
-            Setting {
-                name: "did",
-                kind: Kind::Integer {
-                    minimum: 0,
-                    maximum: 0xffff,
-                },
-                presence: Presence::Default(Fixed::Integer(DEFAULT_DID as i64)),
-                meaning: "The data identifier a Send Location writes and a Receive Location \
-                          serves.",
-                applies: Applies::Both,
-            },
-            Setting {
-                name: "tester_id",
-                kind: Kind::Integer {
-                    minimum: 0,
-                    maximum: 0x1fff_ffff,
-                },
-                presence: Presence::Default(Fixed::Integer(TESTER_ID as i64)),
-                meaning: "The CAN identifier a Send Location's tester transmits under.",
-                applies: Applies::Send,
-            },
-            Setting {
-                name: "ecu_id",
-                kind: Kind::Integer {
-                    minimum: 0,
-                    maximum: 0x1fff_ffff,
-                },
-                presence: Presence::Default(Fixed::Integer(ECU_ID as i64)),
-                meaning: "The CAN identifier a Receive Location's ECU answers from.",
-                applies: Applies::Receive,
-            },
-            transport::configured::timeout(
-                Applies::Both,
-                Some(iso_tp::DEFAULT_TIMEOUT),
-                "How long a peer that stops mid-transfer is waited on; ISO-TP's own \
-                 when left out.",
-            ),
-        ],
-    };
-
-    /// The schemes a Location's address is entered with to choose this technology.
-    const SCHEMES: &'static [&'static str] = &["uds"];
+    const SETTINGS: &'static Settings = declaration::SETTINGS;
+    const SCHEMES: &'static [&'static str] = declaration::SCHEMES;
 
     /// The ISO-TP link's: a peer is waited on as the link waits.
     fn timeout_kept(&mut self) -> Option<&mut dyn transport::configured::TimeoutKept> {
@@ -351,6 +328,7 @@ impl Configured for UdsTransport {
     }
 }
 
+#[cfg(feature = "default")]
 impl UdsTransport {
     /// The tester or the ECU a Location's settings build on `node`: the bus
     /// its address names, or a simulated one a test gives it.
@@ -380,7 +358,8 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    use xcore::settings::Given;
+    use iso_tp::{ECU_ID, TESTER_ID};
+    use xcore::settings::{Applies, Given};
 
     // Built on a simulated bus by its own constructor, never by a name a
     // build with `socketcan` hands the kernel on Linux (another crate of the
